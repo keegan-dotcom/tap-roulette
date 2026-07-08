@@ -82,6 +82,11 @@
     color:#8f9098; font-size:18px; font-style:italic; font-weight:600;
     display:flex; align-items:center; justify-content:center;
     font-family:Georgia, serif;
+    transition:color .25s, border-color .25s, box-shadow .25s;
+  }
+  #info.on {
+    color:#2f7cf6; border-color:rgba(47,124,246,.75);
+    box-shadow:0 0 14px rgba(47,124,246,.4);
   }
   #info:active { background:rgba(255,255,255,.12); }
 
@@ -154,17 +159,20 @@
     return best;
   }
   let infoTaps = [];
+  function syncRigUI() { infoBtn.classList.toggle('on', rigEnabled); }
   infoBtn.addEventListener('touchstart', (e) => {
     e.stopPropagation();
     const now = Date.now();
-    infoTaps = infoTaps.filter(t => now - t < 900);
+    infoTaps = infoTaps.filter(t => now - t < 400);
     infoTaps.push(now);
-    if (infoTaps.length >= 3) {
+    if (infoTaps.length >= 2) {
       rigEnabled = !rigEnabled;
       infoTaps = [];
+      syncRigUI();
       if (navigator.vibrate) navigator.vibrate(rigEnabled ? [30,60,30] : 200);
     }
   }, {passive:false});
+  syncRigUI();
   // ------------------------------
 
   const COLORS = ['#00ff41','#00e5ff','#ff00e5','#ffb300','#5b7bff','#ff5c00','#b4ff00','#ff2d78'];
