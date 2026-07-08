@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#000000">
+<title>Tap Roulette</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body {
+    width:100%; height:100%; overflow:hidden;
+    background:#000; touch-action:none;
+    -webkit-user-select:none; user-select:none;
+    position:fixed; overscroll-behavior:none;
+    font-family:-apple-system, "SF Pro Display", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  }
+  canvas { display:block; width:100vw; height:100vh; }
+
+  /* center title card */
+  #banner {
+    position:fixed; left:50%; top:50%;
+    transform:translate(-50%,-50%);
+    text-align:center; pointer-events:none; z-index:5;
+    transition:opacity .4s ease, transform .4s ease;
+  }
+  #banner.hidden { opacity:0; transform:translate(-50%,-50%) scale(.92); }
+  #banner h1 {
+    font-size:min(13vw, 64px);
+    font-weight:800; font-style:italic; letter-spacing:2px;
+    background:linear-gradient(180deg,#ffffff 20%,#8a8a8a 90%);
+    -webkit-background-clip:text; background-clip:text;
+    -webkit-text-fill-color:transparent;
+    filter:drop-shadow(0 4px 24px rgba(255,255,255,.18));
+  }
+  #banner p {
+    margin-top:14px; color:#7d7d85; font-size:15px; letter-spacing:.4px;
+  }
+  #banner .fingers {
+    margin-top:22px; font-size:30px; letter-spacing:10px;
+    animation:bob 1.6s ease-in-out infinite;
+  }
+  @keyframes bob { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-8px)} }
+
+  /* status chip */
+  #status {
+    position:fixed; top:calc(env(safe-area-inset-top, 12px) + 14px);
+    left:50%; transform:translateX(-50%);
+    padding:8px 18px; border-radius:999px;
+    background:rgba(255,255,255,.07);
+    border:1px solid rgba(255,255,255,.12);
+    backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px);
+    color:#c9c9d1; font-size:13px; font-weight:600;
+    letter-spacing:1.5px; text-transform:uppercase;
+    pointer-events:none; z-index:5; white-space:nowrap;
+    transition:opacity .3s;
+  }
+  #status.off { opacity:0; }
+
+  /* play again pill */
+  #again {
+    position:fixed; left:50%; bottom:calc(env(safe-area-inset-bottom, 20px) + 34px);
+    transform:translateX(-50%) translateY(20px);
+    padding:16px 42px; border-radius:999px; border:none;
+    font-size:17px; font-weight:800; letter-spacing:2px; text-transform:uppercase;
+    color:#000; background:linear-gradient(180deg,#ffffff,#c9c9c9);
+    box-shadow:0 10px 34px rgba(255,255,255,.22), inset 0 1px 0 rgba(255,255,255,.9);
+    opacity:0; pointer-events:none; z-index:6;
+    transition:opacity .35s ease, transform .35s ease;
+  }
+  #again.show { opacity:1; pointer-events:auto; transform:translateX(-50%) translateY(0); }
+  #again:active { transform:translateX(-50%) scale(.96); }
+
+  /* info button */
+  #info {
+    position:fixed; left:18px; bottom:calc(env(safe-area-inset-bottom, 16px) + 18px);
+    z-index:6; width:40px; height:40px; border-radius:50%;
+    background:rgba(255,255,255,.06);
+    border:1px solid rgba(255,255,255,.14);
+    backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);
+    color:#8f9098; font-size:18px; font-style:italic; font-weight:600;
+    display:flex; align-items:center; justify-content:center;
+    font-family:Georgia, serif;
+  }
+  #info:active { background:rgba(255,255,255,.12); }
+
+  /* mute button */
+  #mute {
+    position:fixed; right:18px; bottom:calc(env(safe-area-inset-bottom, 16px) + 18px);
+    z-index:6; width:40px; height:40px; border-radius:50%;
+    background:rgba(255,255,255,.06);
+    border:1px solid rgba(255,255,255,.14);
+    backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);
+    color:#8f9098; font-size:17px;
+    display:flex; align-items:center; justify-content:center;
+  }
+
+  /* red flash overlay on winner */
+  #flash {
+    position:fixed; inset:0; z-index:4; pointer-events:none;
+    background:radial-gradient(circle at 50% 50%, rgba(255,0,0,.28), rgba(120,0,0,.06) 60%, transparent 80%);
+    opacity:0; transition:opacity .15s;
+  }
+  #flash.on { opacity:1; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="flash"></div>
+<div id="banner">
+  <h1>TAP ROULETTE</h1>
+  <p>Everyone holds a finger on the screen.<br>One of you is about to lose.</p>
+  <div class="fingers">👇 👇 👇</div>
+</div>
+<div id="status" class="off"></div>
+<button id="again">Play again</button>
+<div id="info">i</div>
+<div id="mute">🔊</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+  const banner = document.getElementById('banner');
+  const statusEl = document.getElementById('status');
+  const againBtn = document.getElementById('again');
+  const infoBtn = document.getElementById('info');
+  const muteBtn = document.getElementById('mute');
+  const flash = document.getElementById('flash');
+
+  let W, H, DPR;
+  function resize() {
+    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    W = window.innerWidth; H = window.innerHeight;
+    canvas.width = W * DPR; canvas.height = H * DPR;
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  }
+  resize();
+  window.addEventListener('resize', resize);
+
+  // ---------- THE HACK ----------
+  // A finger inside the invisible bottom-right corner zone is never picked.
+  // Triple-tap the (i) button to silently toggle the rig on/off.
+  let rigEnabled = true;
+  function inSafeZone(x, y) {
+    const size = Math.max(130, W * 0.28);
+    return x > W - size && y > H - size;
+  }
+  let infoTaps = [];
+  infoBtn.addEventListener('touchstart', (e) => {
+    e.stopPropagation();
+    const now = Date.now();
+    infoTaps = infoTaps.filter(t => now - t < 900);
+    infoTaps.push(now);
+    if (infoTaps.length >= 3) {
+      rigEnabled = !rigEnabled;
+      infoTaps = [];
+      if (navigator.vibrate) navigator.vibrate(rigEnabled ? [30,60,30] : 200);
+    }
+  }, {passive:false});
+  // ------------------------------
+
+  const COLORS = ['#00ff41','#00e5ff','#ff00e5','#ffb300','#5b7bff','#ff5c00','#b4ff00','#ff2d78'];
+
+  const touches = new Map();
+  let colorIdx = 0;
+
+  let state = 'idle';           // idle | arming | spinning | winner
+  let armStart = 0;
+  const ARM_MS = 1700;
+  let spin = null;
+  let winner = null;
+
+  // ================= AUDIO =================
+  let AC = null, master = null, muted = false;
+  function audio() {
+    if (!AC) {
+      AC = new (window.AudioContext || window.webkitAudioContext)();
+      master = AC.createGain();
+      master.gain.value = 0.9;
+      master.connect(AC.destination);
+    }
+    if (AC.state === 'suspended') AC.resume();
+    return AC;
+  }
+  muteBtn.addEventListener('touchstart', (e) => {
+    e.stopPropagation();
+    muted = !muted;
+    muteBtn.textContent = muted ? '🔇' : '🔊';
+    if (master) master.gain.value = muted ? 0 : 0.9;
+  }, {passive:false});
+
+  function env(g, t0, peak, decay) {
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(peak, t0 + 0.006);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + decay);
+  }
+  function noiseBuffer(ac, dur) {
+    const b = ac.createBuffer(1, ac.sampleRate * dur, ac.sampleRate);
+    const d = b.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    return b;
+  }
+
+  // finger placed: pluck pop
+  function popSound(pitch) {
+    try {
+      const ac = audio(), t0 = ac.currentTime;
+      const o = ac.createOscillator(), g = ac.createGain();
+      o.type = 'sine';
+      o.frequency.setValueAtTime(pitch, t0);
+      o.frequency.exponentialRampToValueAtTime(pitch * 0.5, t0 + 0.12);
+      env(g, t0, 0.25, 0.14);
+      o.connect(g); g.connect(master);
+      o.start(t0); o.stop(t0 + 0.16);
+    } catch(e){}
+  }
+
+  // arming: rising heartbeat thumps
+  let lastHeartbeat = 0;
+  function heartbeat(progress) {
+    try {
+      const ac = audio(), t0 = ac.currentTime;
+      const o = ac.createOscillator(), g = ac.createGain();
+      o.type = 'sine';
+      const f = 55 + progress * 40;
+      o.frequency.setValueAtTime(f, t0);
+      o.frequency.exponentialRampToValueAtTime(f * 0.6, t0 + 0.1);
+      env(g, t0, 0.5, 0.13);
+      o.connect(g); g.connect(master);
+      o.start(t0); o.stop(t0 + 0.15);
+    } catch(e){}
+  }
+
+  // spin tick: layered click — square blip + noise transient
+  function tickSound(prog) {
+    try {
+      const ac = audio(), t0 = ac.currentTime;
+      const f = 350 + prog * 1200;
+      const o1 = ac.createOscillator(), g1 = ac.createGain();
+      o1.type = 'square'; o1.frequency.value = f;
+      env(g1, t0, 0.14, 0.06);
+      o1.connect(g1); g1.connect(master);
+      o1.start(t0); o1.stop(t0 + 0.07);
+
+      const o2 = ac.createOscillator(), g2 = ac.createGain();
+      o2.type = 'triangle'; o2.frequency.value = f * 2.01;
+      env(g2, t0, 0.07, 0.05);
+      o2.connect(g2); g2.connect(master);
+      o2.start(t0); o2.stop(t0 + 0.06);
+
+      const n = ac.createBufferSource(); n.buffer = noiseBuffer(ac, 0.03);
+      const nf = ac.createBiquadFilter(); nf.type = 'highpass'; nf.frequency.value = 4000;
+      const ng = ac.createGain(); env(ng, t0, 0.10, 0.03);
+      n.connect(nf); nf.connect(ng); ng.connect(master);
+      n.start(t0);
+    } catch(e){}
+  }
+
+  // winner: sub drop + alarm siren + noise crash
+  function loseSound() {
+    try {
+      const ac = audio(), t0 = ac.currentTime;
+      // sub thump
+      const sub = ac.createOscillator(), sg = ac.createGain();
+      sub.type = 'sine';
+      sub.frequency.setValueAtTime(120, t0);
+      sub.frequency.exponentialRampToValueAtTime(32, t0 + 0.5);
+      env(sg, t0, 0.9, 0.55);
+      sub.connect(sg); sg.connect(master);
+      sub.start(t0); sub.stop(t0 + 0.6);
+      // descending alarm x2
+      for (let i = 0; i < 2; i++) {
+        const o = ac.createOscillator(), g = ac.createGain();
+        o.type = 'sawtooth';
+        const start = t0 + i * 0.28;
+        o.frequency.setValueAtTime(680 - i * 120, start);
+        o.frequency.exponentialRampToValueAtTime(90, start + 0.55);
+        g.gain.setValueAtTime(0.0001, start);
+        g.gain.exponentialRampToValueAtTime(0.22, start + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.0001, start + 0.6);
+        o.connect(g); g.connect(master);
+        o.start(start); o.stop(start + 0.65);
+      }
+      // crash
+      const n = ac.createBufferSource(); n.buffer = noiseBuffer(ac, 0.5);
+      const nf = ac.createBiquadFilter(); nf.type = 'lowpass';
+      nf.frequency.setValueAtTime(9000, t0);
+      nf.frequency.exponentialRampToValueAtTime(300, t0 + 0.45);
+      const ng = ac.createGain();
+      ng.gain.setValueAtTime(0.3, t0);
+      ng.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.5);
+      n.connect(nf); nf.connect(ng); ng.connect(master);
+      n.start(t0);
+    } catch(e){}
+  }
+  // =========================================
+
+  function setStatus(t) {
+    if (!t) { statusEl.classList.add('off'); return; }
+    statusEl.textContent = t;
+    statusEl.classList.remove('off');
+  }
+
+  function onStart(e) {
+    e.preventDefault();
+    audio();
+    if (state === 'winner') { resetGame(); }
+    for (const t of e.changedTouches) {
+      touches.set(t.identifier, {
+        x: t.clientX, y: t.clientY,
+        color: COLORS[colorIdx++ % COLORS.length],
+        born: performance.now(),
+        dotPhase: Math.random() * Math.PI * 2
+      });
+      popSound(420 + Math.random() * 220);
+      if (navigator.vibrate) navigator.vibrate(12);
+    }
+    banner.classList.add('hidden');
+    rearm();
+  }
+  function onMove(e) {
+    e.preventDefault();
+    for (const t of e.changedTouches) {
+      const rec = touches.get(t.identifier);
+      if (rec) { rec.x = t.clientX; rec.y = t.clientY; }
+    }
+  }
+  function onEnd(e) {
+    e.preventDefault();
+    for (const t of e.changedTouches) touches.delete(t.identifier);
+    if (state === 'spinning') {
+      if (touches.size >= 2) startSpin(); else { spin = null; rearm(); }
+    } else if (state !== 'winner') {
+      rearm();
+    }
+    if (touches.size === 0 && state !== 'winner') resetGame();
+  }
+  canvas.addEventListener('touchstart', onStart, {passive:false});
+  canvas.addEventListener('touchmove', onMove, {passive:false});
+  canvas.addEventListener('touchend', onEnd, {passive:false});
+  canvas.addEventListener('touchcancel', onEnd, {passive:false});
+
+  againBtn.addEventListener('touchstart', (e) => {
+    e.stopPropagation(); e.preventDefault();
+    resetGame();
+  }, {passive:false});
+
+  function rearm() {
+    if (state === 'spinning' || state === 'winner') return;
+    if (touches.size >= 2) {
+      state = 'arming';
+      armStart = performance.now();
+      setStatus('Hold still…');
+    } else {
+      state = 'idle';
+      setStatus(touches.size === 1 ? 'Need at least 2 fingers' : '');
+    }
+  }
+
+  function pickWinnerId() {
+    const ids = [...touches.keys()];
+    if (!rigEnabled) return ids[Math.floor(Math.random() * ids.length)];
+    const eligible = ids.filter(id => !inSafeZone(touches.get(id).x, touches.get(id).y));
+    const pool = eligible.length > 0 ? eligible : ids;
+    return pool[Math.floor(Math.random() * pool.length)];
+  }
+
+  function startSpin() {
+    state = 'spinning';
+    setStatus('');
+    const order = [...touches.keys()];
+    const winId = pickWinnerId();
+    const winPos = order.indexOf(winId);
+    const laps = 3 + Math.floor(Math.random() * 2);
+    const totalSteps = laps * order.length + winPos + 1;
+    spin = { order, winId, totalSteps, step: 0, interval: 65,
+             nextAt: performance.now() + 65, activeId: null };
+  }
+
+  function advanceSpin(now) {
+    if (!spin || now < spin.nextAt) return;
+    spin.step++;
+    spin.activeId = spin.order[(spin.step - 1) % spin.order.length];
+    const prog = spin.step / spin.totalSteps;
+    tickSound(prog);
+    if (navigator.vibrate) navigator.vibrate(8);
+
+    if (spin.step >= spin.totalSteps) {
+      const t = touches.get(spin.winId);
+      winner = t ? { x:t.x, y:t.y, at: now, id: spin.winId } : null;
+      state = 'winner';
+      spin = null;
+      loseSound();
+      flash.classList.add('on');
+      setTimeout(() => flash.classList.remove('on'), 900);
+      if (navigator.vibrate) navigator.vibrate([90,60,260]);
+      setStatus('You lose. 🔴');
+      againBtn.classList.add('show');
+      return;
+    }
+    const t2 = spin.step / spin.totalSteps;
+    spin.interval = 65 + Math.pow(t2, 2.7) * 420;
+    spin.nextAt = now + spin.interval;
+  }
+
+  function resetGame() {
+    state = 'idle';
+    spin = null; winner = null;
+    banner.classList.remove('hidden');
+    againBtn.classList.remove('show');
+    setStatus('');
+  }
+
+  // ================= DRAWING =================
+  function glossyCircle(x, y, r, color, glow) {
+    ctx.save();
+    ctx.shadowColor = color;
+    ctx.shadowBlur = glow;
+    const grad = ctx.createRadialGradient(x - r*0.35, y - r*0.4, r*0.1, x, y, r);
+    grad.addColorStop(0, '#ffffff');
+    grad.addColorStop(0.25, color);
+    grad.addColorStop(1, shade(color, 0.55));
+    ctx.beginPath();
+    ctx.fillStyle = grad;
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    // specular highlight
+    ctx.beginPath();
+    ctx.fillStyle = 'rgba(255,255,255,0.35)';
+    ctx.ellipse(x - r*0.3, y - r*0.42, r*0.32, r*0.18, -0.6, 0, Math.PI*2);
+    ctx.fill();
+  }
+  function shade(hex, f) {
+    const n = parseInt(hex.slice(1), 16);
+    const r = Math.round(((n>>16)&255)*f), g = Math.round(((n>>8)&255)*f), b = Math.round((n&255)*f);
+    return `rgb(${r},${g},${b})`;
+  }
+
+  function drawFinger(t, now, isActive, isWinner) {
+    const age = (now - t.born) / 1000;
+    const pop = Math.min(1, age * 4);
+    const bounce = pop < 1 ? 1 + Math.sin(pop * Math.PI) * 0.18 : 1;
+    const pulse = state === 'arming' ? 1 + Math.sin(now * 0.008) * 0.04 : 1;
+    const r = 60 * (0.6 + 0.4 * pop) * bounce * pulse;
+    const color = isWinner ? '#ff1414' : t.color;
+
+    // orbiting dot rings
+    for (let ring = 1; ring <= 3; ring++) {
+      const ringR = r + 24 + ring * 26;
+      const dots = 9 + ring * 5;
+      const dir = ring % 2 === 0 ? -1 : 1;
+      const speed = isActive ? 4 : (state === 'arming' ? 2 : 1);
+      const a0 = t.dotPhase + dir * now * 0.00035 * speed;
+      ctx.save();
+      ctx.shadowColor = color;
+      ctx.shadowBlur = 8;
+      for (let i = 0; i < dots; i++) {
+        const a = a0 + (i / dots) * Math.PI * 2;
+        const dr = (7 - ring * 1.6) + Math.sin(now*0.004 + i) * 1.1;
+        ctx.beginPath();
+        ctx.fillStyle = color;
+        ctx.globalAlpha = isWinner ? 0.95 : (0.9 - ring * 0.18);
+        ctx.arc(t.x + Math.cos(a)*ringR, t.y + Math.sin(a)*ringR, Math.max(1.5, dr), 0, Math.PI*2);
+        ctx.fill();
+      }
+      ctx.restore();
+      ctx.globalAlpha = 1;
+    }
+
+    // arming countdown arc
+    if (state === 'arming') {
+      const prog = Math.min(1, (now - armStart) / ARM_MS);
+      ctx.beginPath();
+      ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+      ctx.lineWidth = 5;
+      ctx.lineCap = 'round';
+      ctx.arc(t.x, t.y, r + 14, -Math.PI/2, -Math.PI/2 + prog * Math.PI*2);
+      ctx.stroke();
+    }
+
+    // spin highlight ring
+    if (isActive) {
+      ctx.save();
+      ctx.shadowColor = '#fff';
+      ctx.shadowBlur = 26;
+      ctx.beginPath();
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 7;
+      ctx.arc(t.x, t.y, r + 16, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    glossyCircle(t.x, t.y, r, color, isActive || isWinner ? 55 : 24);
+  }
+
+  function drawWinnerRings(now) {
+    if (!winner) return;
+    const el = (now - winner.at) / 1000;
+    for (let i = 0; i < 9; i++) {
+      const rr = 34 + i * 44 + (el * 70) % 44;
+      ctx.beginPath();
+      ctx.strokeStyle = '#ff0000';
+      ctx.globalAlpha = Math.max(0, 0.8 - i * 0.085);
+      ctx.lineWidth = 15;
+      ctx.arc(winner.x, winner.y, rr, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function frame(now) {
+    ctx.clearRect(0, 0, W, H);
+    // vignette
+    const vg = ctx.createRadialGradient(W/2, H/2, Math.min(W,H)*0.2, W/2, H/2, Math.max(W,H)*0.75);
+    vg.addColorStop(0, 'rgba(18,18,24,0.5)');
+    vg.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = vg;
+    ctx.fillRect(0, 0, W, H);
+
+    if (state === 'arming') {
+      const prog = (now - armStart) / ARM_MS;
+      // heartbeat cadence speeds up
+      const beat = 620 - prog * 330;
+      if (now - lastHeartbeat > beat) { heartbeat(prog); lastHeartbeat = now; }
+      if (prog >= 1) {
+        if (touches.size >= 2) startSpin(); else rearm();
+      }
+    }
+    if (state === 'spinning') advanceSpin(now);
+
+    for (const [id, t] of touches) {
+      const isActive = spin && spin.activeId === id;
+      const isWinner = winner && winner.id === id;
+      if (!isWinner) drawFinger(t, now, isActive, false);
+    }
+    if (winner) {
+      const wt = touches.get(winner.id);
+      if (wt) { winner.x = wt.x; winner.y = wt.y; }
+      drawWinnerRings(now);
+      if (wt) drawFinger(wt, now, false, true);
+    }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
